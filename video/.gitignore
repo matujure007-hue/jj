@@ -1,6 +1,7 @@
 node_modules
 out/frames/
 out/stills/
+out/endcard/
 out/*.jpg
 out/*.wav
 out/intro.mp4

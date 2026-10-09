@@ -15,9 +15,9 @@ import * as THREE from 'three';
 
 // ---------- Configuración ----------
 const W = 1080, H = 1920;
-const NAVY = 0x14214d;
+const NAVY = 0x1f4068;
+const RED = 0x9b2431;
 const YELLOW = 0xffc629;
-const LOGO_SRC = new URLSearchParams(location.search).get('logo'); // PNG oficial opcional
 
 // Línea de tiempo (segundos)
 const T = {
@@ -171,60 +171,31 @@ const VALLEY_Y = -70;
   valley.add(houses);
 }
 
-// ---------- Logo (jet | SMART) ----------
-function textTexture(text, align) {
-  const c = document.createElement('canvas');
-  c.width = 1024; c.height = 320;
-  const g = c.getContext('2d');
-  g.font = '900 250px "Inter", "DejaVu Sans", sans-serif';
-  g.fillStyle = '#ffffff';
-  g.textBaseline = 'middle';
-  g.textAlign = align;
-  g.fillText(text, align === 'right' ? 1010 : 14, 170);
-  const t = new THREE.CanvasTexture(c);
+// ---------- Logo oficial (Jet | SMART) ----------
+// logo_jet.png y logo_smart.png salen del logo original (732×175 px) separados por color.
+// Jet ocupa las columnas 0–240 y SMART 215–732; el corte entre ambos está en la columna 228.
+const LOGO_PX = 732, LOGO_PX_H = 175, CUT_PX = 228;
+const U = 4.3 / LOGO_PX; // unidades de escena por píxel del logo
+const GAP_X = (CUT_PX - LOGO_PX / 2) * U;
+function wordMesh(src, x0, x1) {
+  const geo = new THREE.PlaneGeometry((x1 - x0) * U, LOGO_PX_H * U);
+  geo.translate(((x0 + x1) / 2 - CUT_PX) * U, 0, 0); // origen en el punto de corte
+  return new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: loadTex(src), transparent: true, toneMapped: false }));
+}
+let pending = 2;
+function loadTex(src) {
+  const t = new THREE.TextureLoader().load(src, () => { if (--pending === 0) window.logoReady = true; });
   t.colorSpace = THREE.SRGBColorSpace;
   t.anisotropy = 8;
   return t;
 }
-const LOGO_W = 3.2, LOGO_H = LOGO_W * 320 / 1024;
-function wordMesh(text, align) {
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(LOGO_W, LOGO_H),
-    new THREE.MeshBasicMaterial({ map: textTexture(text, align), transparent: true, toneMapped: false }));
-  // El ancla queda en el borde que toca el panel
-  mesh.geometry.translate(align === 'right' ? -LOGO_W / 2 : LOGO_W / 2, 0, 0);
-  return mesh;
-}
 const logo = new THREE.Group();
-const wordL = wordMesh('Jet', 'right');
-const wordR = wordMesh('SMART', 'left');
+const wordL = wordMesh('logo_jet.png', 0, 240);
+const wordR = wordMesh('logo_smart.png', 215, 732);
+wordR.position.z = 0.001;
 logo.add(wordL, wordR);
-// Centra "JetSMART" completo: el corte (y el panel) queda desplazado
-let GAP_X = 0;
-{
-  const g = document.createElement('canvas').getContext('2d');
-  g.font = '900 250px "Inter", "DejaVu Sans", sans-serif';
-  GAP_X = (g.measureText('Jet').width - g.measureText('SMART').width) / 2 * LOGO_W / 1024;
-}
 logo.position.z = 0.02;
 scene.add(logo);
-
-// Logo oficial opcional: se corta a la mitad para separarlo
-if (LOGO_SRC) {
-  new THREE.TextureLoader().load(LOGO_SRC, tex => {
-    tex.colorSpace = THREE.SRGBColorSpace;
-    const ar = tex.image.width / tex.image.height;
-    const w = 4.2, h = w / ar;
-    for (const [mesh, left] of [[wordL, true], [wordR, false]]) {
-      const t = tex.clone(); t.needsUpdate = true;
-      t.repeat.set(0.5, 1); t.offset.set(left ? 0 : 0.5, 0);
-      mesh.geometry.dispose();
-      mesh.geometry = new THREE.PlaneGeometry(w / 2, h).translate(left ? -w / 4 : w / 4, 0, 0);
-      mesh.material.map = t;
-    }
-    GAP_X = 0;
-    window.logoReady = true;
-  });
-} else window.logoReady = true;
 
 // ---------- Panel amarillo (fragmentado) ----------
 const PW = visW * 1.25, PH = visH * 1.25;
@@ -275,7 +246,7 @@ function buildPlane() {
   const g = new THREE.Group();
   const white = new THREE.MeshStandardMaterial({ color: 0xf4f6f8, roughness: 0.35, metalness: 0.2 });
   const navy = new THREE.MeshStandardMaterial({ color: NAVY, roughness: 0.4, metalness: 0.2 });
-  const yellow = new THREE.MeshStandardMaterial({ color: YELLOW, roughness: 0.4 });
+  const red = new THREE.MeshStandardMaterial({ color: RED, roughness: 0.4 });
   const dark = new THREE.MeshStandardMaterial({ color: 0x111418, roughness: 0.6 });
   // Fuselaje (nariz hacia -z)
   const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.2, 2.6, 8, 24), white);
@@ -311,7 +282,7 @@ function buildPlane() {
   const fin = new THREE.Mesh(new THREE.ExtrudeGeometry(finShape, { depth: 0.04, bevelEnabled: false }), navy);
   fin.rotation.y = -Math.PI / 2; fin.position.set(0.02, 0.15, 1.1);
   g.add(fin);
-  const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.12, 0.5), yellow);
+  const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.12, 0.5), red);
   stripe.position.set(0, 0.62, 1.78); stripe.rotation.x = -0.25; g.add(stripe);
   // Ventanillas
   for (let i = 0; i < 14; i++) for (const sgn of [1, -1]) {
@@ -336,7 +307,7 @@ scene.add(camera);
 function renderAt(t) {
   // Fondo: azul marino hasta que el panel tapa todo, luego cielo
   const panelFull = t >= T.split[1];
-  scene.background = panelFull ? null : new THREE.Color(NAVY);
+  scene.background = panelFull ? null : new THREE.Color(0xffffff);
   sky.visible = clouds.visible = valley.visible = panelFull;
   scene.fog = panelFull ? new THREE.Fog(0xb9d3ea, 60, 420) : null;
 
@@ -350,7 +321,8 @@ function renderAt(t) {
   const push = panelHalf / logo.scale.x;
   wordL.position.x = GAP_X - push - sp * 0.4;
   wordR.position.x = GAP_X + push + sp * 0.4;
-  wordL.position.z = wordR.position.z = sp * 0.6;
+  wordL.position.z = sp * 0.6;
+  wordR.position.z = sp * 0.6 + 0.001;
   logo.visible = sp < 1;
 
   // Panel: crece desde una línea en el centro

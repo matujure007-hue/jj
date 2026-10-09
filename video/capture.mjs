@@ -1,5 +1,5 @@
 // Renderiza intro/index.html cuadro por cuadro y lo convierte a MP4.
-// Uso: node capture.mjs [--fps 30] [--out out/intro.mp4] [--logo clips/logo.png] [--frames a,b,c]
+// Uso: node capture.mjs [--fps 30] [--out out/intro.mp4] [--frames a,b,c]
 import { chromium } from 'playwright';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -30,7 +30,6 @@ const page = await browser.newPage({ viewport: { width: 1080, height: 1920 }, de
 page.on('console', m => console.log('[page]', m.text()));
 page.on('pageerror', e => console.error('[page error]', e.message));
 const q = new URLSearchParams({ capture: '1' });
-if (args.logo) q.set('logo', '/' + path.relative(root, path.resolve(args.logo)));
 await page.goto(`http://localhost:${port}/intro/index.html?${q}`);
 await page.waitForFunction(() => window.renderAt && window.logoReady);
 await page.evaluate(() => document.fonts.ready);
