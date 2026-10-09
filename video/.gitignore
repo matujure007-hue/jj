@@ -1,0 +1,6 @@
+node_modules
+out/frames/
+out/stills/
+out/*.jpg
+out/*.wav
+out/intro.mp4

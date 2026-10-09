@@ -1,0 +1,418 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Intro JetSMART</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #000; overflow: hidden; }
+  canvas { display: block; }
+</style>
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
+</head>
+<body>
+<script type="module">
+import * as THREE from 'three';
+
+// ---------- Configuración ----------
+const W = 1080, H = 1920;
+const NAVY = 0x14214d;
+const YELLOW = 0xffc629;
+const LOGO_SRC = new URLSearchParams(location.search).get('logo'); // PNG oficial opcional
+
+// Línea de tiempo (segundos)
+const T = {
+  logoIn: [0.0, 0.8],
+  split: [1.0, 1.9],
+  planeStart: 2.05,
+  impact: 2.7,
+  tilt: [4.3, 6.8],
+  whiteout: [6.4, 7.0],
+  end: 7.0,
+};
+
+// ---------- Utilidades ----------
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const prog = (t, [a, b]) => clamp((t - a) / (b - a));
+const easeInOut = x => x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+const easeOutBack = x => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); };
+const easeOut = x => 1 - Math.pow(1 - x, 3);
+function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const rand = rng(1234);
+
+// ---------- Renderer / escena ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(W, H);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50, W / H, 0.05, 2000);
+const CAM_Z = 10;
+
+scene.add(new THREE.HemisphereLight(0xeaf4ff, 0xb8bcc4, 1.6));
+const sun = new THREE.DirectionalLight(0xfff2dd, 1.8);
+sun.position.set(6, 10, 8);
+scene.add(sun);
+const fill = new THREE.DirectionalLight(0xffffff, 0.9);
+fill.position.set(-2, 1, 12);
+scene.add(fill);
+
+// Tamaño visible en z=0
+const visH = 2 * CAM_Z * Math.tan(THREE.MathUtils.degToRad(25));
+const visW = visH * W / H;
+
+// ---------- Cielo ----------
+const sky = new THREE.Mesh(
+  new THREE.SphereGeometry(900, 48, 24),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false, fog: false,
+    uniforms: { sunDir: { value: new THREE.Vector3(0.35, 0.35, -1).normalize() } },
+    vertexShader: `varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }`,
+    fragmentShader: `varying vec3 vDir; uniform vec3 sunDir;
+      void main(){
+        float h = vDir.y;
+        vec3 top = vec3(0.13,0.36,0.78), hor = vec3(0.70,0.85,0.97), low = vec3(0.80,0.88,0.93);
+        vec3 c = h > 0. ? mix(hor, top, pow(h, 0.6)) : mix(hor, low, clamp(-h*4.,0.,1.));
+        float s = max(dot(vDir, sunDir), 0.);
+        c += vec3(1.,0.9,0.7) * (pow(s, 64.)*1.2 + pow(s, 6.)*0.25);
+        gl_FragColor = vec4(c, 1.);
+      }`,
+  })
+);
+sky.visible = false;
+scene.add(sky);
+
+// ---------- Nubes ----------
+function cloudTexture(seed) {
+  const r = rng(seed), c = document.createElement('canvas');
+  c.width = c.height = 512;
+  const g = c.getContext('2d');
+  for (let i = 0; i < 38; i++) {
+    const x = 256 + (r() - 0.5) * 300, y = 280 + (r() - 0.5) * 110 - Math.abs(x - 256) * 0.15;
+    const rad = 60 + r() * 90;
+    const gr = g.createRadialGradient(x, y, 0, x, y, rad);
+    const shade = 235 + r() * 20;
+    gr.addColorStop(0, `rgba(${shade},${shade},${shade + 5},0.55)`);
+    gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr;
+    g.beginPath(); g.arc(x, y, rad, 0, Math.PI * 2); g.fill();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+const cloudTex = [cloudTexture(1), cloudTexture(2), cloudTexture(3), cloudTexture(4)];
+const clouds = new THREE.Group();
+clouds.visible = false;
+scene.add(clouds);
+function addCloud(x, y, z, s, op = 0.95) {
+  const m = new THREE.SpriteMaterial({ map: cloudTex[Math.floor(rand() * 4)], transparent: true, opacity: op, depthWrite: false, fog: false });
+  const sp = new THREE.Sprite(m);
+  sp.position.set(x, y, z);
+  sp.scale.set(s, s, 1);
+  clouds.add(sp);
+}
+for (let i = 0; i < 55; i++) {
+  const z = -30 - rand() * 260;
+  const side = rand() < 0.5 ? -1 : 1;
+  addCloud(side * (8 + (-z) * 0.12 + rand() * (20 + -z * 0.6)), -4 + rand() * 16, z, 12 + rand() * 26);
+}
+// Capa de nubes bajas, por debajo de la cámara, que se ven al bajar hacia el valle
+for (let i = 0; i < 26; i++) addCloud((rand() - 0.5) * 90, -28 - rand() * 8, -40 - rand() * 110, 14 + rand() * 14, 0.5);
+
+// ---------- Valle (Medellín estilizado) ----------
+const valley = new THREE.Group();
+valley.visible = false;
+scene.add(valley);
+const VALLEY_Y = -70;
+{
+  const geo = new THREE.PlaneGeometry(600, 600, 160, 160);
+  geo.rotateX(-Math.PI / 2);
+  const pos = geo.attributes.position, col = [];
+  const cLow = new THREE.Color(0x6f8f3c), cHigh = new THREE.Color(0x2f5a2a), cTop = new THREE.Color(0x24452a);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), z = pos.getZ(i);
+    const side = Math.abs(x) - 18;
+    let h = side > 0 ? Math.pow(side, 1.35) * 0.35 : 0;
+    h += (Math.sin(x * 0.11 + z * 0.07) + Math.sin(z * 0.13 - x * 0.05) * 0.8 + Math.sin(x * 0.31 + z * 0.23) * 0.3) * (1.2 + Math.max(side, 0) * 0.08);
+    pos.setY(i, h);
+    const k = clamp(h / 40);
+    const c = cLow.clone().lerp(cHigh, k).lerp(cTop, clamp((h - 40) / 40));
+    col.push(c.r, c.g, c.b);
+  }
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  geo.computeVertexNormals();
+  const terrain = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 1 }));
+  terrain.position.y = VALLEY_Y;
+  valley.add(terrain);
+
+  // Casitas de ladrillo y edificios en el valle y laderas
+  const N = 16000;
+  const box = new THREE.BoxGeometry(1, 1, 1); box.translate(0, 0.5, 0);
+  const houses = new THREE.InstancedMesh(box, new THREE.MeshStandardMaterial({ roughness: 0.9 }), N);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3();
+  const brick = [0xb5532c, 0xc4643a, 0xa84a2a, 0xd07a4a, 0xe9e4da, 0xcfd3d6];
+  const r = rng(77);
+  for (let i = 0; i < N; i++) {
+    const x = (r() - 0.5) * 2 * (r() < 0.6 ? 17 : 17 + r() * 22);
+    const z = -40 - r() * 260 + 60;
+    const side = Math.abs(x) - 18;
+    let h = side > 0 ? Math.pow(side, 1.35) * 0.35 : 0;
+    h += (Math.sin(x * 0.11 + z * 0.07) + Math.sin(z * 0.13 - x * 0.05) * 0.8 + Math.sin(x * 0.31 + z * 0.23) * 0.3) * (1.2 + Math.max(side, 0) * 0.08);
+    const tall = Math.abs(x) < 15 && r() < 0.07;
+    s.set(0.35 + r() * 0.4, tall ? 1.2 + r() * 3.5 : 0.25 + r() * 0.35, 0.35 + r() * 0.4);
+    q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), r() * Math.PI);
+    p.set(x, VALLEY_Y + h - 0.2, z);
+    m.compose(p, q, s);
+    houses.setMatrixAt(i, m);
+    houses.setColorAt(i, new THREE.Color(tall ? brick[r() < 0.5 ? 4 + Math.floor(r() * 2) : Math.floor(r() * 4)] : brick[Math.floor(r() * 4)]));
+  }
+  valley.add(houses);
+}
+
+// ---------- Logo (jet | SMART) ----------
+function textTexture(text, align) {
+  const c = document.createElement('canvas');
+  c.width = 1024; c.height = 320;
+  const g = c.getContext('2d');
+  g.font = '900 250px "Inter", "DejaVu Sans", sans-serif';
+  g.fillStyle = '#ffffff';
+  g.textBaseline = 'middle';
+  g.textAlign = align;
+  g.fillText(text, align === 'right' ? 1010 : 14, 170);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  return t;
+}
+const LOGO_W = 3.2, LOGO_H = LOGO_W * 320 / 1024;
+function wordMesh(text, align) {
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(LOGO_W, LOGO_H),
+    new THREE.MeshBasicMaterial({ map: textTexture(text, align), transparent: true, toneMapped: false }));
+  // El ancla queda en el borde que toca el panel
+  mesh.geometry.translate(align === 'right' ? -LOGO_W / 2 : LOGO_W / 2, 0, 0);
+  return mesh;
+}
+const logo = new THREE.Group();
+const wordL = wordMesh('Jet', 'right');
+const wordR = wordMesh('SMART', 'left');
+logo.add(wordL, wordR);
+// Centra "JetSMART" completo: el corte (y el panel) queda desplazado
+let GAP_X = 0;
+{
+  const g = document.createElement('canvas').getContext('2d');
+  g.font = '900 250px "Inter", "DejaVu Sans", sans-serif';
+  GAP_X = (g.measureText('Jet').width - g.measureText('SMART').width) / 2 * LOGO_W / 1024;
+}
+logo.position.z = 0.02;
+scene.add(logo);
+
+// Logo oficial opcional: se corta a la mitad para separarlo
+if (LOGO_SRC) {
+  new THREE.TextureLoader().load(LOGO_SRC, tex => {
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const ar = tex.image.width / tex.image.height;
+    const w = 4.2, h = w / ar;
+    for (const [mesh, left] of [[wordL, true], [wordR, false]]) {
+      const t = tex.clone(); t.needsUpdate = true;
+      t.repeat.set(0.5, 1); t.offset.set(left ? 0 : 0.5, 0);
+      mesh.geometry.dispose();
+      mesh.geometry = new THREE.PlaneGeometry(w / 2, h).translate(left ? -w / 4 : w / 4, 0, 0);
+      mesh.material.map = t;
+    }
+    GAP_X = 0;
+    window.logoReady = true;
+  });
+} else window.logoReady = true;
+
+// ---------- Panel amarillo (fragmentado) ----------
+const PW = visW * 1.25, PH = visH * 1.25;
+const NX = 9, NY = 16;
+const panel = new THREE.Group();
+scene.add(panel);
+const shards = [];
+{
+  const grid = [];
+  const r = rng(99);
+  for (let j = 0; j <= NY; j++) for (let i = 0; i <= NX; i++) {
+    const edge = i === 0 || j === 0 || i === NX || j === NY;
+    grid.push(new THREE.Vector2(
+      (i / NX - 0.5) * PW + (edge ? 0 : (r() - 0.5) * PW / NX * 0.7),
+      (j / NY - 0.5) * PH + (edge ? 0 : (r() - 0.5) * PH / NY * 0.7)));
+  }
+  const at = (i, j) => grid[j * (NX + 1) + i];
+  const tris = [];
+  for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+    const a = at(i, j), b = at(i + 1, j), c = at(i + 1, j + 1), d = at(i, j + 1);
+    if (r() < 0.5) tris.push([a, b, c], [a, c, d]); else tris.push([a, b, d], [b, c, d]);
+  }
+  const mats = [0xffc629, 0xffcd3c, 0xf5bb1c].map(c => new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.35, roughness: 0.6, side: THREE.DoubleSide, flatShading: true }));
+  const impact = new THREE.Vector2(0, 0.35);
+  for (const tri of tris) {
+    const cx = (tri[0].x + tri[1].x + tri[2].x) / 3, cy = (tri[0].y + tri[1].y + tri[2].y) / 3;
+    const sh = new THREE.Shape(tri.map(v => new THREE.Vector2(v.x - cx, v.y - cy)));
+    const geo = new THREE.ExtrudeGeometry(sh, { depth: 0.06, bevelEnabled: false });
+    const mesh = new THREE.Mesh(geo, mats[Math.floor(r() * 3)]);
+    const home = new THREE.Vector3(cx, cy, -0.06);
+    mesh.position.copy(home);
+    const d = new THREE.Vector2(cx, cy).sub(impact);
+    const dist = d.length();
+    const dir = d.clone().normalize();
+    const speed = 3 + 9 / (0.6 + dist) + r() * 2;
+    shards.push({
+      mesh, home, dist,
+      vel: new THREE.Vector3(dir.x * speed, dir.y * speed, -2 - r() * 7 + (r() < 0.25 ? 8 : 0)),
+      axis: new THREE.Vector3(r() - 0.5, r() - 0.5, r() - 0.5).normalize(),
+      spin: 4 + r() * 10,
+    });
+    panel.add(mesh);
+  }
+}
+
+// ---------- Avión ----------
+function buildPlane() {
+  const g = new THREE.Group();
+  const white = new THREE.MeshStandardMaterial({ color: 0xf4f6f8, roughness: 0.35, metalness: 0.2 });
+  const navy = new THREE.MeshStandardMaterial({ color: NAVY, roughness: 0.4, metalness: 0.2 });
+  const yellow = new THREE.MeshStandardMaterial({ color: YELLOW, roughness: 0.4 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x111418, roughness: 0.6 });
+  // Fuselaje (nariz hacia -z)
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.2, 2.6, 8, 24), white);
+  body.rotation.x = Math.PI / 2;
+  g.add(body);
+  // Cono de cola levantado
+  const tail = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.45, 24), white);
+  tail.rotation.x = Math.PI / 2; tail.position.set(0, 0.03, 1.72);
+  g.add(tail);
+  // Alas en flecha
+  const wingShape = new THREE.Shape([new THREE.Vector2(0, 0.35), new THREE.Vector2(1.55, -0.25), new THREE.Vector2(1.6, -0.45), new THREE.Vector2(0, -0.35)]);
+  for (const sgn of [1, -1]) {
+    const w = new THREE.Mesh(new THREE.ExtrudeGeometry(wingShape, { depth: 0.045, bevelEnabled: false }), white);
+    w.rotation.x = -Math.PI / 2;
+    w.scale.x = sgn;
+    w.position.set(0, -0.1, 0.15);
+    w.rotation.z = 0; w.rotation.y = sgn * -0.08; // diedro
+    g.add(w);
+    // Winglet
+    const wl = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.28, 0.18), navy);
+    wl.position.set(sgn * 1.6, 0.03, 0.55); g.add(wl);
+    // Motor
+    const eng = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.11, 0.55, 20), navy);
+    eng.rotation.x = Math.PI / 2; eng.position.set(sgn * 0.62, -0.26, 0.0); g.add(eng);
+    const fan = new THREE.Mesh(new THREE.CircleGeometry(0.11, 20), dark);
+    fan.position.set(sgn * 0.62, -0.26, 0.28); g.add(fan);
+    // Estabilizador horizontal
+    const st = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.03, 0.28), white);
+    st.position.set(sgn * 0.33, 0.12, 1.55); st.rotation.y = sgn * -0.3; g.add(st);
+  }
+  // Deriva (cola vertical) azul con franja amarilla
+  const finShape = new THREE.Shape([new THREE.Vector2(0, 0), new THREE.Vector2(0.75, 0), new THREE.Vector2(0.95, 0.85), new THREE.Vector2(0.65, 0.85)]);
+  const fin = new THREE.Mesh(new THREE.ExtrudeGeometry(finShape, { depth: 0.04, bevelEnabled: false }), navy);
+  fin.rotation.y = -Math.PI / 2; fin.position.set(0.02, 0.15, 1.1);
+  g.add(fin);
+  const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.12, 0.5), yellow);
+  stripe.position.set(0, 0.62, 1.78); stripe.rotation.x = -0.25; g.add(stripe);
+  // Ventanillas
+  for (let i = 0; i < 14; i++) for (const sgn of [1, -1]) {
+    const win = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.05, 0.06), dark);
+    win.position.set(sgn * 0.198, 0.06, -1.1 + i * 0.15); g.add(win);
+  }
+  return g;
+}
+const plane = buildPlane();
+plane.visible = false;
+scene.add(plane);
+
+// ---------- Destello ----------
+const flash = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthTest: false, toneMapped: false }));
+flash.renderOrder = 999;
+camera.add(flash);
+flash.position.z = -0.2;
+flash.scale.set(0.2, 0.3, 1);
+scene.add(camera);
+
+// ---------- Render en tiempo t ----------
+function renderAt(t) {
+  // Fondo: azul marino hasta que el panel tapa todo, luego cielo
+  const panelFull = t >= T.split[1];
+  scene.background = panelFull ? null : new THREE.Color(NAVY);
+  sky.visible = clouds.visible = valley.visible = panelFull;
+  scene.fog = panelFull ? new THREE.Fog(0xb9d3ea, 60, 420) : null;
+
+  // Logo: entrada con rebote
+  const li = easeOutBack(prog(t, T.logoIn));
+  const sp = easeInOut(prog(t, T.split));
+  const panelHalf = sp * PW / 2;
+  logo.scale.setScalar(0.6 + 0.4 * li + 0.04 * prog(t, [T.logoIn[1], T.split[0]]));
+  wordL.material.opacity = wordR.material.opacity = clamp(prog(t, T.logoIn) * 2);
+  // Las palabras se separan empujadas por el panel
+  const push = panelHalf / logo.scale.x;
+  wordL.position.x = GAP_X - push - sp * 0.4;
+  wordR.position.x = GAP_X + push + sp * 0.4;
+  wordL.position.z = wordR.position.z = sp * 0.6;
+  logo.visible = sp < 1;
+
+  // Panel: crece desde una línea en el centro
+  panel.visible = t >= T.split[0] - 0.001;
+  panel.scale.set(Math.max(sp, 0.002), 1, 1);
+  panel.position.x = GAP_X * logo.scale.x * (1 - sp);
+  for (const s of shards) {
+    const dt = t - T.impact - s.dist * 0.03;
+    if (dt <= 0) {
+      s.mesh.position.copy(s.home);
+      s.mesh.quaternion.identity();
+    } else {
+      s.mesh.position.set(
+        s.home.x + s.vel.x * dt,
+        s.home.y + s.vel.y * dt - 4 * dt * dt,
+        s.home.z + s.vel.z * dt);
+      s.mesh.quaternion.setFromAxisAngle(s.axis, s.spin * dt);
+    }
+  }
+  // Leve "respiración" del panel lleno antes del impacto
+  if (t > T.split[1] && t < T.impact) panel.position.z = -Math.sin((t - T.split[1]) / (T.impact - T.split[1]) * Math.PI) * 0.15;
+  else panel.position.z = 0;
+
+  // Avión: sale desde detrás de la cámara hacia el fondo
+  plane.visible = t >= T.planeStart;
+  if (plane.visible) {
+    const v = (CAM_Z + 1.2) / (T.impact - T.planeStart); // velocidad para llegar al panel en el impacto
+    const dt = t - T.planeStart;
+    let z = CAM_Z + 1.2 - v * dt;
+    // Después del impacto, sigue y desacelera un poco hacia el horizonte
+    if (t > T.impact) { const a = t - T.impact; z = -(v * 0.85 * a + 6 * a * a); }
+    plane.position.set(0.05 * Math.sin(t * 2), 0.9 - 0.55 * clamp(dt / (T.impact - T.planeStart)) + Math.max(0, t - T.impact) * 0.9, z);
+    plane.rotation.set(-0.06, 0, Math.sin(Math.max(0, t - T.impact) * 1.3) * 0.25);
+  }
+
+  // Cámara: temblor en el impacto, luego inclinación hacia el valle
+  const shake = t > T.impact ? Math.exp(-(t - T.impact) * 7) * 0.12 : 0;
+  const tp = easeInOut(prog(t, T.tilt));
+  const drift = Math.max(0, t - T.impact);
+  camera.position.set(
+    Math.sin(t * 61) * shake,
+    Math.cos(t * 47) * shake - tp * 6,
+    CAM_Z - drift * 3 - tp * 18);
+  camera.rotation.set(-tp * THREE.MathUtils.degToRad(40), 0, Math.sin(t * 53) * shake * 0.3 + tp * 0.06);
+  camera.fov = 50 + (t > T.impact ? 6 * Math.exp(-(t - T.impact) * 3) : 0);
+  camera.updateProjectionMatrix();
+
+  // Destello blanco: en el impacto y al final (transición a los clips)
+  const f1 = t > T.impact ? Math.exp(-(t - T.impact) * 14) * 0.8 : 0;
+  const f2 = easeInOut(prog(t, T.whiteout));
+  flash.material.opacity = Math.max(f1, f2);
+
+  renderer.render(scene, camera);
+}
+window.renderAt = renderAt;
+window.DURATION = T.end;
+
+// Vista previa en tiempo real si se abre en el navegador
+if (!new URLSearchParams(location.search).has('capture')) {
+  const t0 = performance.now();
+  renderer.setAnimationLoop(() => renderAt(((performance.now() - t0) / 1000) % (T.end + 0.5)));
+}
+</script>
+</body>
+</html>
